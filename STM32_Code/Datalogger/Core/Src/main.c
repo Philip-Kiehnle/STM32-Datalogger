@@ -41,7 +41,8 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+#define DATALOGGER_VERSION_MAJOR 1
+#define DATALOGGER_VERSION_MINOR 1
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -55,6 +56,7 @@ DMA_HandleTypeDef hdma_usart2_tx;
 uint16_t ADC2ConvertedData[CHANNELS*FRAMES];
 
 volatile bool fast_mon_vars_en;
+uint8_t decimation_factor;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -80,6 +82,53 @@ void UARTprintf(const char *pcString, ...)
     va_end(args);
     HAL_UART_Transmit(&huart2, (uint8_t *)buf, len, 10);
 }
+
+
+void print_help()
+{
+	UARTprintf("\n");
+	UARTprintf("Datalogger v%d.%d\n", DATALOGGER_VERSION_MAJOR, DATALOGGER_VERSION_MINOR);
+	UARTprintf("Build: %s %s\n", __DATE__, __TIME__);
+	UARTprintf("Commands:\n");
+	UARTprintf("s: Start monitoring stream\n");
+	UARTprintf("x: Stop monitoring stream\n");
+	UARTprintf("d: Set decimation factor + number\n");
+	UARTprintf("o: Set output state + number\n");
+	UARTprintf("0-9: Set decimation factor or output state\n");
+	UARTprintf("r: Read settings\n");
+	UARTprintf("h: Print help (this text)\n");
+}
+
+
+void print_output_state()
+{
+	if (fast_mon_vars_en == false) {
+		UARTprintf("Output state: PA10=%d PA9=%d\n", HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10), HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9));
+	}
+}
+
+
+void start_stream()
+{
+	/* Start ADC group regular conversion with DMA */
+	if (HAL_ADC_Start_DMA(&hadc2, (uint32_t *)&ADC2ConvertedData, sizeof(ADC2ConvertedData)/sizeof(ADC2ConvertedData[0])) != HAL_OK)
+	{
+	  /* ADC conversion start error */
+	  Error_Handler();
+	}
+	fast_mon_vars_en = true;
+}
+
+
+void stop_stream()
+{
+	if (HAL_ADC_Stop_DMA(&hadc2) != HAL_OK)
+	{
+	  Error_Handler();
+	}
+	fast_mon_vars_en = false;
+}
+
 
 
 /**
@@ -174,17 +223,9 @@ int main(void)
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
   GPIOB->BSRR = (1<<8);  // enable green LED
-  UARTprintf("Datalogger v%d\n", 1);
-  UARTprintf("Build: %s %s\n", __DATE__, __TIME__);
-
-  /*## Start ADC conversions ###############################################*/
-  /* Start ADC group regular conversion with DMA */
-  if (HAL_ADC_Start_DMA(&hadc2, (uint32_t *)&ADC2ConvertedData, sizeof(ADC2ConvertedData)/sizeof(ADC2ConvertedData[0])) != HAL_OK)
-  {
-    /* ADC conversion start error */
-    Error_Handler();
-  }
-  //UARTprintf("started ADC\n");
+  print_help();
+  fast_mon_vars_en = false;
+  decimation_factor = 1;
 
   /* USER CODE END 2 */
 
@@ -199,25 +240,112 @@ int main(void)
 	// UART RX
 	uint8_t rx_buf = 0;
 	HAL_UART_Receive(&huart2, &rx_buf, 1, 1);
+	static bool set_decimation = false;
+	static bool set_output_state = false;
 
-	if (rx_buf == 'f') {
-		UARTprintf("Fast monitor TRIG\n");
-		fast_mon_vars_en = true;
-	} else if (rx_buf == 'd') {  // disable
-		fast_mon_vars_en = false;
-	} else if (rx_buf == '0') {  // GPIO 00 PA10=0 PA9=0
-		GPIOA->BRR = (1<<9);
-		GPIOA->BRR = (1<<10);
-	} else if (rx_buf == '1') {  // GPIO 01 PA10=0 PA9=1
-		GPIOA->BSRR = (1<<9);
-		GPIOA->BRR = (1<<10);
-	} else if (rx_buf == '2') {  // GPIO 10 PA10=1 PA9=0
-		GPIOA->BRR = (1<<9);
-		GPIOA->BSRR = (1<<10);
-	} else if (rx_buf == '3') {  // GPIO 11 PA10=1 PA9=1
-		GPIOA->BSRR = (1<<9);
-		GPIOA->BSRR = (1<<10);
-	}
+
+	if (rx_buf == 's') {
+		UARTprintf("Monitoring stream START\n");
+		start_stream();
+
+	} else if (rx_buf == 'x') {  // stop monitoring stream
+		stop_stream();
+
+	} else if (rx_buf == 'd') {
+		set_decimation = true;
+		set_output_state = false;
+		UARTprintf("Enter decimation factor\n");
+
+	} else if (rx_buf == 'o') {
+		set_decimation = false;
+		set_output_state = true;
+		UARTprintf("Enter output state:\n"
+				"0: PA10=0 PA9=0\n"
+				"1: PA10=0 PA9=1\n"
+				"2: PA10=1 PA9=0\n"
+				"3: PA10=1 PA9=1\n");
+
+	} else if (set_output_state) {
+
+		if (rx_buf == '0') {        // GPIO 00 PA10=0 PA9=0
+			GPIOA->BRR = (1<<9);
+			GPIOA->BRR = (1<<10);
+			print_output_state();
+			set_output_state = false;
+
+		} else if (rx_buf == '1') {  // GPIO 01 PA10=0 PA9=1
+			GPIOA->BSRR = (1<<9);
+			GPIOA->BRR = (1<<10);
+			print_output_state();
+			set_output_state = false;
+
+		} else if (rx_buf == '2') {  // GPIO 10 PA10=1 PA9=0
+			GPIOA->BRR = (1<<9);
+			GPIOA->BSRR = (1<<10);
+			print_output_state();
+			set_output_state = false;
+
+		} else if (rx_buf == '3') {  // GPIO 11 PA10=1 PA9=1
+			GPIOA->BSRR = (1<<9);
+			GPIOA->BSRR = (1<<10);
+			print_output_state();
+			set_output_state = false;
+  		} else if (rx_buf != 0) {
+  			set_output_state = false;
+  		}
+
+	} else if (set_decimation) {
+		int8_t new_decimation_factor = -1;
+
+		if (rx_buf == '0' || rx_buf == '1' || rx_buf == '2' || rx_buf == '4' || rx_buf == '8') {
+			new_decimation_factor = rx_buf - '0';
+			if (new_decimation_factor == 0)
+				new_decimation_factor = 1;
+			set_decimation = false;
+			UARTprintf("Decimation factor = %d\n", new_decimation_factor);
+
+  		} else if (rx_buf >= '0' && rx_buf <= '9') {
+  			UARTprintf("Supported decimation factors: 0/1,2,4,8\n");
+
+  		} else if (rx_buf != 0) {
+  			set_decimation = false;
+  		}
+
+  		if (   new_decimation_factor != -1  // valid decimation factor received
+  			&& new_decimation_factor != decimation_factor
+		   ){
+
+			stop_stream();
+			HAL_Delay(100);
+
+			if (new_decimation_factor == 1) {  // 22.1 ksps
+				hadc2.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_32;
+				hadc2.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_1;
+			} else if (new_decimation_factor == 2) {  // 11.1 ksps
+				hadc2.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_64;
+				hadc2.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_2;
+			} else if (new_decimation_factor == 4) {  // 5.54 ksps
+				hadc2.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_128;
+				hadc2.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_3;
+			} else if (new_decimation_factor == 8) {  // 2.77 ksps
+				hadc2.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_256;
+				hadc2.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_4;
+			}
+
+			if (HAL_ADC_Init(&hadc2) != HAL_OK)
+			{
+				Error_Handler();
+			}
+			decimation_factor = new_decimation_factor;
+  		}
+
+	} else if (rx_buf == 'r' && fast_mon_vars_en == false ) {
+		UARTprintf("Decimation factor = %d\n", decimation_factor);
+		print_output_state();
+
+	} else if (rx_buf == 'h' && fast_mon_vars_en == false) {
+		print_help();
+  	}
   }
   /* USER CODE END 3 */
 }
@@ -318,7 +446,7 @@ static void MX_ADC2_Init(void)
   sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
-  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.SingleDiff = ADC_DIFFERENTIAL_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
   if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
@@ -328,17 +456,9 @@ static void MX_ADC2_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_2;
-  sConfig.Rank = ADC_REGULAR_RANK_2;
-  if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Regular Channel
-  */
   sConfig.Channel = ADC_CHANNEL_3;
-  sConfig.Rank = ADC_REGULAR_RANK_3;
+  sConfig.Rank = ADC_REGULAR_RANK_2;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
   if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -347,6 +467,15 @@ static void MX_ADC2_Init(void)
   /** Configure Regular Channel
   */
   sConfig.Channel = ADC_CHANNEL_4;
+  sConfig.Rank = ADC_REGULAR_RANK_3;
+  if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_17;
   sConfig.Rank = ADC_REGULAR_RANK_4;
   if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
   {

@@ -11,7 +11,9 @@ import numpy as np
 
 
 seconds = 2
-samplerate = 22.1e3
+max_samplerate = 22.1e3
+decimation_factor = 2  # supported decimation factors: 1,2,4,8
+samplerate = max_samplerate/decimation_factor
 
 d = np.dtype([
 ('v_dc', 'u2'),
@@ -46,7 +48,7 @@ def ser_read_exact(ser, size):
 
 
 def stop_fast_monitor_mode(ser):
-    ser.write('d'.encode())  # stop active monitor mode
+    ser.write('x'.encode())  # stop active monitor mode
     ser.readall()
 
 
@@ -54,12 +56,19 @@ def start_fast_monitor_mode(ser):
     if ser.read(1):
         stop_fast_monitor_mode(ser)
 
-    ser.write('f'.encode())  # start fast monitor mode
-    magic_bytes = b'Fast monitor TRIG\n'
+    ser.write('d'.encode())  # set decimation factor
+    ser.readline()
+    ser.write(str(decimation_factor).encode())
+    ser.readline()
+
+    ser.write('s'.encode())  # start fast monitor mode
+    magic_bytes = b'Monitoring stream START\n'
     line = ser.readline()
     print(line)
     if line == magic_bytes:
         print("started monitoring")
+        return True
+    return False
 
 
 def plot(ax, name, gain = 1.0):
@@ -80,47 +89,48 @@ def main():
 
 
     if len(sys.argv) != 2:
-        print('Usage', sys.argv[0], '/dev/ttyUSB')
+        print('Usage', sys.argv[0], '/dev/ttyACMx')
         sys.exit()
 
     #signal.signal(signal.SIGINT, signal_handler)
 
     if sys.argv[1].find('/dev/tty') != -1:
         ser = serial.Serial(sys.argv[1], 2000000, timeout=1)
-        start_fast_monitor_mode(ser)
 
-        bytes_to_read = FAST_MON_BYTES
-        packet = b''  # Initialize packet as an empty bytes object
-        start_time = time.time()
-        seq_time = start_time
+        if start_fast_monitor_mode(ser):
 
-        bytes_read = 0
+            bytes_to_read = FAST_MON_BYTES
+            packet = b''  # Initialize packet as an empty bytes object
+            start_time = time.time()
+            seq_time = start_time
 
-        while bytes_to_read > 0:
-            r_len = min(bytes_to_read, BYTES_PER_FRAME)
-            packet += ser_read_exact(ser, r_len)
-            bytes_read += r_len
-            bytes_to_read -= r_len
+            bytes_read = 0
 
-            # Print sample rate and duration every 0.5 seconds
-            current_time = time.time()
-            elapsed_total = current_time - start_time
-            elapsed_seq = current_time - seq_time
-            if elapsed_seq >= 0.5:
-                sample_rate = bytes_read / elapsed_seq  # bytes per second
-                print(f"Sample rate: {sample_rate:.2f} bytes/s, Duration: {elapsed_total:.2f}s")
-                seq_time = current_time  # Reset the timer
-                bytes_read = 0  # Reset the bytes counter
+            while bytes_to_read > 0:
+                r_len = min(bytes_to_read, BYTES_PER_FRAME)
+                packet += ser_read_exact(ser, r_len)
+                bytes_read += r_len
+                bytes_to_read -= r_len
+
+                # Print sample rate and duration every 0.5 seconds
+                current_time = time.time()
+                elapsed_total = current_time - start_time
+                elapsed_seq = current_time - seq_time
+                if elapsed_seq >= 0.5:
+                    sample_rate = bytes_read / elapsed_seq  # bytes per second
+                    print(f"Sample rate: {sample_rate:.2f} bytes/s, Duration: {elapsed_total:.2f}s")
+                    seq_time = current_time  # Reset the timer
+                    bytes_read = 0  # Reset the bytes counter
 
 
-        stop_fast_monitor_mode(ser)
-        ser.close()
+            stop_fast_monitor_mode(ser)
+            ser.close()
 
-        with open('monitor_vars_fast.bin', 'wb') as file:
-            file.write(packet)
+            with open('monitor_vars_fast.bin', 'wb') as file:
+                file.write(packet)
 
-        for i in range(FAST_MON_FRAMES):
-            vars[i] = struct.unpack_from(fast_monitor_vars_t, packet[i*struct_size:(i+1)*struct_size])
+            for i in range(FAST_MON_FRAMES):
+                vars[i] = struct.unpack_from(fast_monitor_vars_t, packet[i*struct_size:(i+1)*struct_size])
 
     else:
         with open(sys.argv[1], 'rb') as file:
