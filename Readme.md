@@ -9,13 +9,15 @@ Four ADC channels are continuously sampled and streamed via UART-USB to a host P
 STM32 clock: 170MHz  
 ADC clock: fadc = 170MHz/4 = 42.5MHz
 
-Sampling time:
+Sampling time:  
 2,5cyc + 12,5cyc = 15cyc
 
-Channels = 4
+### 2 Channels; Oversampling factor = 32 (decimation factor = 1)
+fs = 42.5MHz / (15×2×32) = 44.27 kHz  
+F_UART = 44.27k × 2chn × 16bit = 1416.6 kbps
 
-### Oversampling factor = 32 (decimation factor = 1)
-fs = 42.5MHz / (15×4×32) = 22.1 kHz
+### 4 Channels; Oversampling factor = 32 (decimation factor = 1)
+fs = 42.5MHz / (15×4×32) = 22.1 kHz  
 F_UART = 22.1k × 4chn × 16bit = 1416.6 kbps
 
 UART has start and stop bits, assume 8b/10 netto rate.  
@@ -25,10 +27,12 @@ UART has start and stop bits, assume 8b/10 netto rate.
 
 # Debug
 ```
-picocom -b 2000000 --imap lfcrlf /dev/ttyACM1
+picocom -b 2000000 --imap lfcrlf /dev/ttyACM0
 ```
 
 
 # Notes
 AMC3330 noise without extra filter: 31780 to 31800  
-LEM noise without extra filter: 48510 to 48550
+AMC3330 noise with extra 330pF C filter between P and N: 31670 to 31680  
+LEM noise without extra filter: 48510 to 48550  
+LEM noise with extra 1nF C filter and microcontroller pin pulldown enabled: 48495 to 48520

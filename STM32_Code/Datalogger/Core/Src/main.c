@@ -42,7 +42,7 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 #define DATALOGGER_VERSION_MAJOR 1
-#define DATALOGGER_VERSION_MINOR 1
+#define DATALOGGER_VERSION_MINOR 2
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -53,7 +53,7 @@ UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
-uint16_t ADC2ConvertedData[CHANNELS*FRAMES];
+uint16_t ADC2ConvertedData[MAX_CHANNELS*FRAMES];
 
 volatile bool fast_mon_vars_en;
 uint8_t decimation_factor;
@@ -92,6 +92,8 @@ void print_help()
 	UARTprintf("Commands:\n");
 	UARTprintf("s: Start monitoring stream\n");
 	UARTprintf("x: Stop monitoring stream\n");
+	UARTprintf("t: Two channel mode\n");
+	UARTprintf("f: Four channel mode\n");
 	UARTprintf("d: Set decimation factor + number\n");
 	UARTprintf("o: Set output state + number\n");
 	UARTprintf("0-9: Set decimation factor or output state\n");
@@ -242,7 +244,7 @@ int main(void)
 	HAL_UART_Receive(&huart2, &rx_buf, 1, 1);
 	static bool set_decimation = false;
 	static bool set_output_state = false;
-
+	static bool two_chn_mode = false;
 
 	if (rx_buf == 's') {
 		UARTprintf("Monitoring stream START\n");
@@ -250,6 +252,26 @@ int main(void)
 
 	} else if (rx_buf == 'x') {  // stop monitoring stream
 		stop_stream();
+
+	} else if (rx_buf == 't') {
+		two_chn_mode = true;
+		stop_stream();
+		HAL_Delay(100);
+		hadc2.Init.NbrOfConversion = 2;
+		if (HAL_ADC_Init(&hadc2) != HAL_OK)
+		{
+			Error_Handler();
+		}
+
+	} else if (rx_buf == 'q') {
+		two_chn_mode = false;
+		stop_stream();
+		HAL_Delay(100);
+		hadc2.Init.NbrOfConversion = 4;
+		if (HAL_ADC_Init(&hadc2) != HAL_OK)
+		{
+			Error_Handler();
+		}
 
 	} else if (rx_buf == 'd') {
 		set_decimation = true;
@@ -318,16 +340,16 @@ int main(void)
 			stop_stream();
 			HAL_Delay(100);
 
-			if (new_decimation_factor == 1) {  // 22.1 ksps
+			if (new_decimation_factor == 1) {  // 4chn: 22.1 ksps; 2chn: 44.27 ksps
 				hadc2.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_32;
 				hadc2.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_1;
-			} else if (new_decimation_factor == 2) {  // 11.1 ksps
+			} else if (new_decimation_factor == 2) {  // 4chn: 11.1 ksps; 2chn: 22.1 ksps
 				hadc2.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_64;
 				hadc2.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_2;
-			} else if (new_decimation_factor == 4) {  // 5.54 ksps
+			} else if (new_decimation_factor == 4) {  // 4chn: 5.54 ksps; 2chn: 11.1 ksps
 				hadc2.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_128;
 				hadc2.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_3;
-			} else if (new_decimation_factor == 8) {  // 2.77 ksps
+			} else if (new_decimation_factor == 8) {  // 4chn: 2.77 ksps; 2chn: 5.54 ksps
 				hadc2.Init.Oversampling.Ratio = ADC_OVERSAMPLING_RATIO_256;
 				hadc2.Init.Oversampling.RightBitShift = ADC_RIGHTBITSHIFT_4;
 			}

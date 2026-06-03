@@ -4,9 +4,9 @@
 //ISR runtime measurement using testpin PA12
 #define DEBUG_ISR if(1)  // 0: no pin toggling  1: enable pin toggling. Increases runtime and maybe ADC noise.
 
-#define CHANNELS 4
+#define MAX_CHANNELS 4
 
-//# Oversampling = 32
+//# 4chn; Oversampling = 32
 // cycles per conversion = 15
 //fs = 42.5MHz / (15*4*32) = 22.1 kHz
 //F_UART = 22.1k * 4chn * 16bit = 1416.6 kbps

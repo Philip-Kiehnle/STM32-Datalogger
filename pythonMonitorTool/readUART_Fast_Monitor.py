@@ -19,18 +19,22 @@ class scale:
 
 
 seconds = 1.0
-max_samplerate = 22.1e3
-decimation_factor = 2  # supported decimation factors: 1,2,4,8
+channels = 2  # 2 or 4 channels supported
+max_samplerate_2chn = 44.2708e3
+max_samplerate_4chn = 22.1354e3
+decimation_factor = 1  # supported decimation factors: 1,2,4,8
+
+max_samplerate = max_samplerate_2chn if (channels==2) else max_samplerate_4chn
 samplerate = max_samplerate/decimation_factor
 
 # sensor calibration and scale to SI units
 chnX_scale = [
               scale(unit = 'V',
-                    offset = -0.5 * 2**16 + 1003,
+                    offset = -0.5 * 2**16 + 1091,
                     gain = 0.99 * 1.25 * 0.23/16),  # scale to volt
 
               scale(unit = 'A',
-                    offset = -2.5/3.3 * 2**16 + 1117,
+                    offset = -2.5/3.3 * 2**16 + 1129,
                     gain = 0.989 * 3.3/(2**16) / 0.025),  # scale to ampere 25mV/A
 
               scale(unit = 'raw',
@@ -58,6 +62,10 @@ d = np.dtype([  #i2 for int16
 # f float32
 fast_monitor_vars_t = "HHHH"
 
+if channels == 2:
+    d = np.dtype(d.descr[:2])
+    fast_monitor_vars_t = fast_monitor_vars_t[:2]
+
 struct_size = struct.calcsize(fast_monitor_vars_t)
 FAST_MON_FRAMES = int(seconds*samplerate)
 vars = np.zeros(FAST_MON_FRAMES, dtype=d)
@@ -83,6 +91,9 @@ def start_fast_monitor_mode(ser):
     if ser.read(1):
         stop_fast_monitor_mode(ser)
 
+    chn_mode_char = 't' if (channels==2) else 'f'
+    ser.write(chn_mode_char.encode())  # set channel mode: 2(two) or 4(four) 
+    ser.readline()
     ser.write('d'.encode())  # set decimation factor
     ser.readline()
     ser.write(str(decimation_factor).encode())
@@ -178,8 +189,9 @@ def main():
         i +=1
      
     # for calibration
-    print(f"avg chn1: {scaled_samples[0].mean()}")
-    print(f"avg chn2: {scaled_samples[1].mean()}")
+    #print(f"avg chn1: {vars[d.names[0]].mean()}")
+    #print(f"avg chn2: {vars[d.names[1]].mean()}")
+    #print(f"avg chn2: {scaled_samples[1].mean()}")
 
     fig, ax1 = plt.subplots()
     ax1.grid(axis='x')
