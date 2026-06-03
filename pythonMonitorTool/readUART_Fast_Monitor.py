@@ -9,17 +9,44 @@ import struct
 import time
 import numpy as np
 
+from dataclasses import dataclass
 
-seconds = 2
+@dataclass
+class scale:
+    unit: str
+    offset: float
+    gain: float
+
+
+seconds = 1.0
 max_samplerate = 22.1e3
 decimation_factor = 2  # supported decimation factors: 1,2,4,8
 samplerate = max_samplerate/decimation_factor
 
-d = np.dtype([
-('v_dc', 'u2'),
-('i_dc', 'u2'),
-('i_ac1', 'i2'),
-('i_ac2', 'i2'),
+# sensor calibration and scale to SI units
+chnX_scale = [
+              scale(unit = 'V',
+                    offset = -0.5 * 2**16 + 1003,
+                    gain = 0.99 * 1.25 * 0.23/16),  # scale to volt
+
+              scale(unit = 'A',
+                    offset = -2.5/3.3 * 2**16 + 1117,
+                    gain = 0.989 * 3.3/(2**16) / 0.025),  # scale to ampere 25mV/A
+
+              scale(unit = 'raw',
+                    offset = 0.0,
+                    gain = 1.0),
+
+              scale(unit = 'raw',
+                    offset = 0.0,
+                    gain = 1.0)
+            ]
+
+d = np.dtype([  #i2 for int16
+('v', 'u2'),
+('i', 'u2'),
+('chn3', 'u2'),
+('chn4', 'u2'),
 ])
 
 # b int8
@@ -29,7 +56,7 @@ d = np.dtype([
 # i uint32
 # I uint32
 # f float32
-fast_monitor_vars_t = "HHhh"
+fast_monitor_vars_t = "HHHH"
 
 struct_size = struct.calcsize(fast_monitor_vars_t)
 FAST_MON_FRAMES = int(seconds*samplerate)
@@ -144,18 +171,28 @@ def main():
     #value = np.clip(0.01*vars['i_ac1'], -5000, 5000)
     #print(f'i_ac1  min={min(value):.3f} avg={sum(value)/FAST_MON_FRAMES:.3f} max={max(value):.3f} ')
 
+    i = 0
+    scaled_samples = np.empty([4, FAST_MON_FRAMES])
+    for field_name in d.names:
+        scaled_samples[i] = (vars[field_name]+chnX_scale[i].offset) * chnX_scale[i].gain
+        i +=1
+     
+    # for calibration
+    print(f"avg chn1: {scaled_samples[0].mean()}")
+    print(f"avg chn2: {scaled_samples[1].mean()}")
 
     fig, ax1 = plt.subplots()
     ax1.grid(axis='x')
 
-    plot(ax1, 'v_dc', 1.0)
-    plot(ax1, 'i_dc', 1.0)
+    #plot(ax1, 'v', 1.0)
+    ax1.plot(x, scaled_samples[0], label=d.names[0])
+
 
     ax2 = ax1.twinx()
     ax2._get_lines.prop_cycler = ax1._get_lines.prop_cycler
 
-    plot(ax2, 'i_ac1', 1.0)
-    plot(ax2, 'i_ac2', 1.0)
+    #plot(ax2, 'i', 1.0)
+    ax2.plot(x, scaled_samples[1], label=d.names[1])
 
     ax1.legend(loc='upper left')
     ax2.legend(loc='upper right')
