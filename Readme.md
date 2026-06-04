@@ -3,6 +3,41 @@
 An STM32G4 Nucleo-32 board (NUCLEO-G431KB) is used to build this datalogger.  
 Four ADC channels are continuously sampled and streamed via UART-USB to a host PC. The host PC can configure the decimation factor to be able reduce the maximum samplerate of 22.1 ksps by a factor of 2, 4 or 8. Hardware averaging is used to increase the signal quality. The python script [readUART_Fast_Monitor.py](pythonMonitorTool/readUART_Fast_Monitor.py) is used to store the raw 16bit ADC data in a binary or HDF5 file.
 
+## Howto
+
+### Install python packages
+All components require the python venv setup:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+#pip install pyserial numpy h5py matplotlib
+#pip freeze > requirements.txt
+pip install -r requirements.txt
+```
+
+### Allow USB Serial Access 
+```
+sudo adduser $USER dialout
+```
+New login is required.
+
+### Run
+For testing, the [readUART_Fast_Monitor.py](pythonMonitorTool/readUART_Fast_Monitor.py) is used in direct plot mode. It also writes a binary file for plotting the data again.
+```
+python3 readUART_Fast_Monitor.py /dev/ttyACM0
+```
+
+If longer measurements should be acquired, the HDF5 file format is selected in the config section. The application does not plot anything directly but continues sampling until the application is stopped. The data is directly written to the HDF5 file.
+Metadata like the scaling and samplerate is also stored in the HDF5 file. The [plot.py](pythonMonitorTool/plot.py) can be used to scale the data to SI units and plot the curves.
+
+```
+python3 plot.py measure_latest.hdf5
+```
+
+The FAT file system has a file size limit of 4GB, so at 4chn 22ksps the approximated storage time is:  
+4Gb / (22ksps × 4chn × 2byte) = ~6 hours
+With prescaling to float datatype, the duration would decrease to:  
+4Gb / (22ksps × 4chn × 4byte) = ~3 hours
 
 ## ADC Setup
 

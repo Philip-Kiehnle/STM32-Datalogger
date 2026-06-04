@@ -16,6 +16,7 @@
 
 # python monitor data
 pythonMonitorTool/*.bin
+pythonMonitorTool/measure_*.hdf5
 
 # others
 __pycache__
