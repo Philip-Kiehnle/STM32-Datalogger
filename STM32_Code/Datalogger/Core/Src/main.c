@@ -25,8 +25,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-
 #include <config.h>
+#include "output_timer.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,12 +42,16 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 #define DATALOGGER_VERSION_MAJOR 1
-#define DATALOGGER_VERSION_MINOR 2
+#define DATALOGGER_VERSION_MINOR 3
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc2;
 DMA_HandleTypeDef hdma_adc2;
+
+IWDG_HandleTypeDef hiwdg;
+
+LPTIM_HandleTypeDef hlptim1;
 
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_tx;
@@ -57,6 +61,7 @@ uint16_t ADC2ConvertedData[MAX_CHANNELS*FRAMES];
 
 volatile bool fast_mon_vars_en;
 uint8_t decimation_factor;
+volatile bool output_timer_request = false;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -65,6 +70,8 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_ADC2_Init(void);
+static void MX_LPTIM1_Init(void);
+static void MX_IWDG_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -94,9 +101,10 @@ void print_help()
 	UARTprintf("x: Stop monitoring stream\n");
 	UARTprintf("t: Two channel mode\n");
 	UARTprintf("f: Four channel mode\n");
-	UARTprintf("d: Set decimation factor + number\n");
-	UARTprintf("o: Set output state + number\n");
-	UARTprintf("0-9: Set decimation factor or output state\n");
+	UARTprintf("d: Set decimation factor (+ number)\n");
+	UARTprintf("o: Open output state menu for [PA10,PA9]\n");
+	UARTprintf("l: Set output PA12 low for <number> minutes. PA12 is default high. Timer can be refreshed.\n");
+	UARTprintf("0-9: Set decimation factor, output state or timer\n");
 	UARTprintf("r: Read settings\n");
 	UARTprintf("h: Print help (this text)\n");
 }
@@ -107,6 +115,23 @@ void print_output_state()
 	if (fast_mon_vars_en == false) {
 		UARTprintf("Output state: PA10=%d PA9=%d\n", HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10), HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9));
 	}
+}
+
+
+void resetWatchdog()
+{
+	// Watchdog runs at 32/8=4kHz -> ~1sec for 4095
+	/* Refresh IWDG: reload counter */
+	if(HAL_IWDG_Refresh(&hiwdg) != HAL_OK) {
+	  Error_Handler();
+	}
+}
+
+
+void HAL_LPTIM_AutoReloadMatchCallback(LPTIM_HandleTypeDef *hlptim)
+{
+//	cnt_1Hz++;
+	output_timer_request = true;
 }
 
 
@@ -164,7 +189,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
-	DEBUG_ISR GPIOA->BSRR = (1<<12);  // set Testpin PA12 (yellow LED) T0
+	DEBUG_ISR GPIOB->BSRR = (1<<7);  // set Testpin PB7 (PA5) (ext. yellow LED) T0
 
 	/********************************************************/
 	/* Highest priority: Get ADC samples					*/
@@ -186,7 +211,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 //	while (HAL_UART_GetState(&huart2) != HAL_UART_STATE_READY)
 //	{
 //	}
-	DEBUG_ISR GPIOA->BRR = (1<<12);  // reset Testpin PA12 (yellow LED) T1: ~xxus after T0
+	DEBUG_ISR GPIOB->BRR = (1<<7);  // reset Testpin PB7 (PA5) (ext. yellow LED) T1: ~3.24us after T0
 
 }
 /* USER CODE END 0 */
@@ -223,7 +248,16 @@ int main(void)
   MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_ADC2_Init();
+  MX_LPTIM1_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
+
+  // Start timer for 1Hz system timebase
+  #define LPTIM_TICKS_PER_SEC (32000/128)  // timer has 32kHz oscillator and DIV128 -> 250Hz
+  if (HAL_LPTIM_Counter_Start_IT(&hlptim1, LPTIM_TICKS_PER_SEC) != HAL_OK) {
+    Error_Handler();
+  }
+
   GPIOB->BSRR = (1<<8);  // enable green LED
   print_help();
   fast_mon_vars_en = false;
@@ -238,15 +272,22 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	resetWatchdog();
+
+	if (output_timer_request) {
+		output_timer_request = false;
+		output_timer_step();
+	}
 
 	// UART RX
 	uint8_t rx_buf = 0;
 	HAL_UART_Receive(&huart2, &rx_buf, 1, 1);
 	static bool set_decimation = false;
 	static bool set_output_state = false;
+	static bool set_timer = false;
 	static bool two_chn_mode = false;
 
-	if (rx_buf == 's') {
+	if (rx_buf == 's' && fast_mon_vars_en == false) {
 		UARTprintf("Monitoring stream START\n");
 		start_stream();
 
@@ -263,7 +304,7 @@ int main(void)
 			Error_Handler();
 		}
 
-	} else if (rx_buf == 'q') {
+	} else if (rx_buf == 'f') {
 		two_chn_mode = false;
 		stop_stream();
 		HAL_Delay(100);
@@ -286,6 +327,20 @@ int main(void)
 				"1: PA10=0 PA9=1\n"
 				"2: PA10=1 PA9=0\n"
 				"3: PA10=1 PA9=1\n");
+
+	} else if (rx_buf == 'l') {
+		set_timer = true;
+		UARTprintf("Enter minutes 0-9\n");
+
+	} else if (set_timer) {
+		if (rx_buf != 0) {
+			set_timer = false;
+		}
+		if (rx_buf >= '0' && rx_buf <= '9') {
+			uint16_t minutes = rx_buf-'0';
+			output_timer_set(0, 60*minutes);
+			UARTprintf("output_timer_set %d minutes\n", minutes);
+		}
 
 	} else if (set_output_state) {
 
@@ -362,11 +417,17 @@ int main(void)
   		}
 
 	} else if (rx_buf == 'r' && fast_mon_vars_en == false ) {
+		UARTprintf("\nChannel mode: %s\n", two_chn_mode ? "TWO_CHN" : "FOUR_CHN");
 		UARTprintf("Decimation factor = %d\n", decimation_factor);
 		print_output_state();
+		UARTprintf("Timer output PA12 low for remaining %d seconds.\n", output_timer_get(0));
 
 	} else if (rx_buf == 'h' && fast_mon_vars_en == false) {
 		print_help();
+
+  	} else if (rx_buf != 0 && fast_mon_vars_en == false) {
+  		UARTprintf("\nUnknown command!");
+  		print_help();
   	}
   }
   /* USER CODE END 3 */
@@ -388,9 +449,10 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV4;
@@ -510,6 +572,69 @@ static void MX_ADC2_Init(void)
 }
 
 /**
+  * @brief IWDG Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_IWDG_Init(void)
+{
+
+  /* USER CODE BEGIN IWDG_Init 0 */
+
+  /* USER CODE END IWDG_Init 0 */
+
+  /* USER CODE BEGIN IWDG_Init 1 */
+
+  /* USER CODE END IWDG_Init 1 */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_8;
+  hiwdg.Init.Window = 4095;
+  hiwdg.Init.Reload = 4095;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN IWDG_Init 2 */
+
+  /* USER CODE END IWDG_Init 2 */
+
+}
+
+/**
+  * @brief LPTIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_LPTIM1_Init(void)
+{
+
+  /* USER CODE BEGIN LPTIM1_Init 0 */
+
+  /* USER CODE END LPTIM1_Init 0 */
+
+  /* USER CODE BEGIN LPTIM1_Init 1 */
+
+  /* USER CODE END LPTIM1_Init 1 */
+  hlptim1.Instance = LPTIM1;
+  hlptim1.Init.Clock.Source = LPTIM_CLOCKSOURCE_APBCLOCK_LPOSC;
+  hlptim1.Init.Clock.Prescaler = LPTIM_PRESCALER_DIV128;
+  hlptim1.Init.Trigger.Source = LPTIM_TRIGSOURCE_SOFTWARE;
+  hlptim1.Init.OutputPolarity = LPTIM_OUTPUTPOLARITY_HIGH;
+  hlptim1.Init.UpdateMode = LPTIM_UPDATE_IMMEDIATE;
+  hlptim1.Init.CounterSource = LPTIM_COUNTERSOURCE_INTERNAL;
+  hlptim1.Init.Input1Source = LPTIM_INPUT1SOURCE_GPIO;
+  hlptim1.Init.Input2Source = LPTIM_INPUT2SOURCE_GPIO;
+  if (HAL_LPTIM_Init(&hlptim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN LPTIM1_Init 2 */
+
+  /* USER CODE END LPTIM1_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -593,10 +718,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_12, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9|GPIO_PIN_10, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7|LD2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PA9 PA10 PA12 */
   GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_12;
@@ -605,12 +733,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : PB7 LD2_Pin */
+  GPIO_InitStruct.Pin = GPIO_PIN_7|LD2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   /* USER CODE END MX_GPIO_Init_2 */

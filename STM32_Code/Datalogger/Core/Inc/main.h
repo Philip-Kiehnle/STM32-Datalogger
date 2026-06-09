@@ -71,7 +71,15 @@ void Error_Handler(void);
 #define LD2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
+#define DEBUG_UART 0
 
+#if DEBUG_UART
+  #define DBG_PRINTF(...) UARTprintf(__VA_ARGS__)
+#else
+  #define DBG_PRINTF(...)
+#endif
+
+void UARTprintf(const char *pcString, ...);
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

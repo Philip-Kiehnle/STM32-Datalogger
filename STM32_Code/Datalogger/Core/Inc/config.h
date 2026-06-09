@@ -1,8 +1,8 @@
 #ifndef INC_CONFIG_H
 #define INC_CONFIG_H
 
-//ISR runtime measurement using testpin PA12
-#define DEBUG_ISR if(1)  // 0: no pin toggling  1: enable pin toggling. Increases runtime and maybe ADC noise.
+//ISR runtime measurement using testpin PB7 (PA5)
+#define DEBUG_ISR if(0)  // 0: no pin toggling  1: enable pin toggling. Increases runtime and maybe ADC noise.
 
 #define MAX_CHANNELS 4
 
