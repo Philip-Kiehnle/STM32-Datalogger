@@ -3,6 +3,12 @@
 An STM32G4 Nucleo-32 board (NUCLEO-G431KB) is used to build this datalogger.  
 Four ADC channels are continuously sampled and streamed via UART-USB to a host PC. The host PC can configure the decimation factor to be able reduce the maximum samplerate of 22.1 ksps by a factor of 2, 4 or 8. Hardware averaging is used to increase the signal quality. The python script [readUART_Fast_Monitor.py](pythonMonitorTool/readUART_Fast_Monitor.py) is used to store the raw 16bit ADC data in a binary or HDF5 file.
 
+ADC2 channel connection:  
+Channel 1: Differential PA0 PA1  
+Channel 2: Single-Ended PA6  
+Channel 3: Single-Ended PA7  
+Channel 4: Single-Ended PA4  
+
 ## Howto
 
 ### Install python packages

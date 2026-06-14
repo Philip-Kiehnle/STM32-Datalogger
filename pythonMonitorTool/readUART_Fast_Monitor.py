@@ -22,8 +22,9 @@ class scale:
 ###############################
 # Setup the measurement here: #
 ###############################
-HDF5_MODE = True  # other mode uses binary file and direct plot
-seconds = 1.0  # only used in non HDF5 mode
+TRIG_LEVEL = ['r30', None, None, None]  # store only if trigger condition occurs: r=rising, f=falling, a=absolute_value
+HDF5_MODE = True  # other mode uses binary file and direct plot without trigger
+seconds = 10.0
 channels = 2  # 2 or 4 channels supported
 decimation_factor = 1  # supported decimation factors: 1,2,4,8
 # sensor calibration and scale to SI units
@@ -80,13 +81,19 @@ vars = np.zeros(FAST_MON_FRAMES, dtype=d)
 x = np.arange(FAST_MON_FRAMES)
 FAST_MON_BYTES = FAST_MON_FRAMES*struct_size
 BYTES_PER_FRAME = 443
-BYTES_PER_HDF5_CHUNK = 128*BYTES_PER_FRAME
+BYTES_PER_HDF5_CHUNK = 16*BYTES_PER_FRAME  # UART_buffer_size=4096; 32x reaches 4095 bytes; 16x seems okay
+
+print('HDF5_MODE', HDF5_MODE)
+print('Seconds', seconds)
+print('Channels', channels)
+print('Decimation factor', decimation_factor)
 
 
 def ser_read_exact(ser, size):
     bytesAvail = ser.inWaiting()
     while bytesAvail < size:
         bytesAvail = ser.inWaiting()
+        time.sleep(0.002)  # prevents CPU spin + gives OS time to fill buffer. 4096/(0.8*2Mbaud) = 2.56ms
     packet = ser.read(size)
     return packet
 
@@ -147,6 +154,7 @@ def main():
         ### HDF5 MODE ###
         #################
         if HDF5_MODE:
+            start_rec = False
             filename = 'measure_' + datetime.datetime.now().astimezone().strftime("%Y-%m-%dT%H-%M-%S%z.hdf5")
             with h5py.File(filename, "w") as f:
                 symlink_path = 'measure_latest.hdf5'
@@ -167,6 +175,22 @@ def main():
                 hdf5_dset.attrs["units"] = [s.unit for s in chn_scale]
                 hdf5_dset.attrs["offsets"] = [s.offset for s in chn_scale]
                 hdf5_dset.attrs["gains"] = [s.gain for s in chn_scale]
+
+                trig_channels = list()
+                if TRIG_LEVEL == [None, None, None, None]:
+                    start_rec = True
+                else:
+                    trig_level_raw = [None, None, None, None]
+                    trig_level_low_raw = [0, 0, 0, 0]
+                    for idx, lvl in enumerate(TRIG_LEVEL):
+                        if lvl != None:
+                            trig_level_raw[idx] = int((float(lvl[1:]) / chn_scale[idx].gain) - chn_scale[idx].offset)
+                            trig_level_low_raw[idx] = int((-float(lvl[1:]) / chn_scale[idx].gain) - chn_scale[idx].offset)  # for absolute_value trigger
+                            trig_channels.append(idx)
+                    print('TRIG_LEVEL', TRIG_LEVEL)
+                    print('trig_level_raw', trig_level_raw)
+
+                ser.write('l9'.encode())  # Disable short circuit contactor for 9 minutes.
 
                 if start_fast_monitor_mode(ser):
 
@@ -190,7 +214,10 @@ def main():
                         elapsed_seq = current_time - seq_time
                         if elapsed_seq >= 0.5:
                             sample_rate = bytes_read_timer / elapsed_seq  # bytes per second
-                            print(f"Sample rate: {sample_rate:.2f} bytes/s, Duration: {elapsed_total:.2f}s")
+                            if start_rec == True:
+                                print(f"Sample rate: {sample_rate:.2f} bytes/s, Duration: {elapsed_total:.2f}s")
+                            else:
+                                print("Waiting for trigger conditions...")
                             seq_time = current_time  # Reset the timer
                             bytes_read_timer = 0  # Reset the bytes counter
 
@@ -198,12 +225,28 @@ def main():
 
                             # Interpret bytes as an array of records
                             records = np.frombuffer(packet, dtype=d)
-                            n = len(records)
 
-                            hdf5_dset.resize(write_pos + n, axis=0)
-                            hdf5_dset[write_pos:write_pos + n] = records
+                            if start_rec == False:
+                                for r in records:
+                                    for chn in trig_channels:
+                                        if    ( (TRIG_LEVEL[chn][0] == 'r' or TRIG_LEVEL[chn][0] == 'a') and r[chn] > trig_level_raw[chn] ) \
+                                           or ( TRIG_LEVEL[chn][0] == 'f' and r[chn] < trig_level_raw[chn] ) \
+                                           or ( TRIG_LEVEL[chn][0] == 'a' and r[chn] < trig_level_low_raw[chn] ):
+                                            print('Found trigger condition in channel', chn+1)                                         
+                                            start_rec = True
+                                            break
+                                    if start_rec == True:
+                                        break
 
-                            write_pos += n
+                            if start_rec == True:
+                                n = len(records)
+                                hdf5_dset.resize(write_pos + n, axis=0)
+                                hdf5_dset[write_pos:write_pos + n] = records
+                                write_pos += n
+                                if (write_pos >= FAST_MON_FRAMES):
+                                    print('Recorded', seconds, 'seconds.')
+                                    break
+
                             bytes_read_hdf5_chunk = 0
                             packet = b''  # Initialize packet as an empty bytes object
 
