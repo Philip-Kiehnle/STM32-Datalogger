@@ -42,7 +42,7 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 #define DATALOGGER_VERSION_MAJOR 1
-#define DATALOGGER_VERSION_MINOR 3
+#define DATALOGGER_VERSION_MINOR 4
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -81,6 +81,7 @@ static void MX_IWDG_Init(void);
 
 void UARTprintf(const char *pcString, ...)
 {
+  if (fast_mon_vars_en == false) {  // dont disturb data stream
 #define BUF_MAXLEN 1024
     char buf[BUF_MAXLEN];
     va_list args;
@@ -88,6 +89,7 @@ void UARTprintf(const char *pcString, ...)
     int len = vsnprintf(buf, BUF_MAXLEN, pcString, args);
     va_end(args);
     HAL_UART_Transmit(&huart2, (uint8_t *)buf, len, 10);
+  }
 }
 
 
@@ -97,6 +99,7 @@ void print_help()
 	UARTprintf("Datalogger v%d.%d\n", DATALOGGER_VERSION_MAJOR, DATALOGGER_VERSION_MINOR);
 	UARTprintf("Build: %s %s\n", __DATE__, __TIME__);
 	UARTprintf("Commands:\n");
+	UARTprintf("e: Read temperature (0.1°C) and rel. humidity (0.1%) of DHT22 sensor\n");
 	UARTprintf("s: Start monitoring stream\n");
 	UARTprintf("x: Stop monitoring stream\n");
 	UARTprintf("t: Two channel mode\n");
@@ -263,6 +266,14 @@ int main(void)
   fast_mon_vars_en = false;
   decimation_factor = 1;
 
+  // Configure DHT22 temperature and humidity sensor
+  DHT22_Init(GPIOB, GPIO_PIN_5);
+  uint16_t temperature;
+  uint16_t rel_humidity;
+  DHT22_Get_Data(&temperature, &rel_humidity);
+  UARTprintf("temp=%d\n", temperature);
+  UARTprintf("hum=%d\n", rel_humidity);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -287,7 +298,11 @@ int main(void)
 	static bool set_timer = false;
 	static bool two_chn_mode = false;
 
-	if (rx_buf == 's' && fast_mon_vars_en == false) {
+	if (rx_buf == 'e' && fast_mon_vars_en == false) {
+	  DHT22_Get_Data(&temperature, &rel_humidity);
+	  UARTprintf("%d %d\n", temperature, rel_humidity);
+
+	} else if (rx_buf == 's' && fast_mon_vars_en == false) {
 		UARTprintf("Monitoring stream START\n");
 		start_stream();
 
