@@ -6,14 +6,17 @@ import matplotlib.pyplot as plt
 import sys
 
 MAX_SAMPLES = int(200e9)
-#TRIG_LEVEL = [None, -0.5, None, None] # chn2 Ampere
-TRIG_LEVEL = [None, None, None, None]
+TRIG_LEVEL = [None, 'a0.71', None, None]  # r=rising, f=falling, a=absolute_value
+#TRIG_LEVEL = [None, None, None, None]  # r=rising, f=falling, a=absolute_value
+TRIG_FILTER = 2  # number of samples matching the trigger condition to filter outliers
 
 PLOT_MODE = 'COMBINED'
 #PLOT_MODE = 'STACKED'
 #PLOT_MODE = 'SEPERATE_WINDOWS'
 
 filename = sys.argv[1]
+
+trig_channels = list()
 
 with h5py.File(filename, "r") as f:
     dset = f["samples"]
@@ -29,7 +32,22 @@ with h5py.File(filename, "r") as f:
     gains = np.asarray(dset.attrs["gains"], dtype=float)
     offsets = np.asarray(dset.attrs["offsets"], dtype=float)
 
+    num_samples = len(data[channel_names[0]])
+    print('num_samples =', num_samples)
+
+    trig_level_raw = [None, None, None, None]
+    trig_level_low_raw = [0, 0, 0, 0]
+    for idx, lvl in enumerate(TRIG_LEVEL):
+        if lvl != None:
+            trig_level_raw[idx] = int((float(lvl[1:]) / gains[idx]) - offsets[idx])
+            trig_level_low_raw[idx] = int((-float(lvl[1:]) / gains[idx]) - offsets[idx])  # for absolute_value trigger
+            trig_channels.append(idx)
+    print('TRIG_LEVEL', TRIG_LEVEL)
+    print('trig_level_raw', trig_level_raw)
+    print('trig_level_low_raw', trig_level_low_raw)
+
     samplerate = dset.attrs.get("samplerate", None)
+    print('Samplerate =', samplerate, 'Hz')
 
 n_channels = len(channel_names)
 
@@ -39,31 +57,45 @@ if PLOT_MODE == 'COMBINED':
     ax2 = ax1.twinx()
     ax2._get_lines.prop_cycler = ax1._get_lines.prop_cycler
 
-    start_idx = 0
+    start_idx = -1
+    progress_percent = 0
+    trig_samples = 0
 
     for ch_idx, name in enumerate(channel_names):
 
         if TRIG_LEVEL[ch_idx] != None:
             print(f"Searching trigger condition for chn{ch_idx+1}...")
-            raw = data[name].astype(np.float64)
-            scaled = (raw + offsets[ch_idx]) * gains[ch_idx]
-            for idx, sample in enumerate(scaled):
-                if sample < TRIG_LEVEL[ch_idx]:
-                    start_idx = max(0, idx-50)
-                    print(f"found at idx {idx}.")
-                    break
+            for idx, sample in enumerate(data[name]):
+                if    ( (TRIG_LEVEL[ch_idx][0] == 'r' or TRIG_LEVEL[ch_idx][0] == 'a') and sample > trig_level_raw[ch_idx] ) \
+                   or ( TRIG_LEVEL[ch_idx][0] == 'f' and sample < trig_level_raw[ch_idx] ) \
+                   or ( TRIG_LEVEL[ch_idx][0] == 'a' and sample < trig_level_low_raw[ch_idx] ):
+
+                    trig_samples += 1
+                    if trig_samples >= TRIG_FILTER:
+                        start_idx = max(0, idx-50)
+                        print(f"found at idx {idx}.")
+                        break
+                else:
+                    trig_samples = 0
+
+                if num_samples > 10e6:
+                    if idx/num_samples > progress_percent/100:
+                        print(progress_percent, '% samples analysed.')
+                        progress_percent += 10
+
         else:
             continue
 
-        if start_idx != 0:
+        if start_idx != -1:
             break
         else:
             print(f"Trigger condition not found.")
+            start_idx = 0
 
 
     for ch_idx, name in enumerate(channel_names):
 
-        raw = data[name].astype(np.float64)[start_idx:+MAX_SAMPLES]
+        raw = data[name].astype(np.float64)[start_idx:start_idx+MAX_SAMPLES]
 
         x = np.arange(len(raw))
         scaled = (raw + offsets[ch_idx]) * gains[ch_idx]
